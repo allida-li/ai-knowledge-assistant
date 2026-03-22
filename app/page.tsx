@@ -1,9 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ChatMessage from './components/chatMessage';
 import ChatInput from './components/chatInput';
-
 
 interface Message {
   id: string;
@@ -12,77 +11,92 @@ interface Message {
   timestamp: Date;
 }
 
+const INITIAL_MESSAGE: Message = {
+  id: 'initial-bot-message',
+  text: '你好！我是AI助手，有什么可以帮你的吗？',
+  sender: 'bot',
+  timestamp: new Date(0),
+};
+
+const createMessage = (
+  text: string,
+  sender: Message['sender'],
+): Message => ({
+  id: crypto.randomUUID(),
+  text,
+  sender,
+  timestamp: new Date(),
+});
+
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      text: '你好！我是AI助手，有什么可以帮你的吗？',
-      sender: 'bot',
-      timestamp: new Date(),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
-  const [question, setQuestion] = useState([]);
-  const [docText, setDocText] = useState("");
+  const [docText, setDocText] = useState('');
+
+  useEffect(() => {
+    setMessages((prev) => {
+      if (prev.length !== 1 || prev[0].id !== INITIAL_MESSAGE.id) {
+        return prev;
+      }
+
+      return [
+        {
+          ...INITIAL_MESSAGE,
+          timestamp: new Date(),
+        },
+      ];
+    });
+  }, []);
 
   const handleSendMessage = async (messageText: string) => {
-    if (!question) return;
+    const trimmedMessage = messageText.trim();
+    if (!trimmedMessage || isLoading) return;
 
-    // 添加用户消息
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: messageText,
-      sender: 'user',
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages((prev) => [...prev, createMessage(trimmedMessage, 'user')]);
     setIsLoading(true);
 
-    // request the local api route to get the answer
-    const response = await fetch('http://localhost:3001/api/chat', {
+    try {
+      const response = await fetch('http://localhost:3001/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ question: trimmedMessage }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Chat request failed');
+      }
+
+      const data = await response.json();
+      setMessages((prev) => [
+        ...prev,
+        createMessage(data.answer ?? '暂时没有获取到回复，请稍后再试。', 'bot'),
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        createMessage('发送消息失败，请检查服务是否启动后重试。', 'bot'),
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleNewChat = () => {
+    setMessages([INITIAL_MESSAGE]);
+  };
+
+  const uploadDoc = async () => {
+    await fetch('http://localhost:3001/api/upload', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ question: messageText }),
-    });
-    const data = await response.json();
-
-    // 添加机器人回复消息
-    const botMessage: Message = {
-      id: (Date.now() + 1).toString(),
-      text: data.answer,
-      sender: 'bot',
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, botMessage]);
-    setIsLoading(false);
-
-  };
-
-  const handleNewChat = () => {
-    setMessages([
-      {
-        id: Date.now().toString(),
-        text: '你好！我是AI助手，有什么可以帮你的吗？',
-        sender: 'bot',
-        timestamp: new Date(),
-      },
-    ]);
-  };
-
-
-  const uploadDoc = async () => {
-    await fetch("http://localhost:3001/api/upload", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ text: docText })
+      body: JSON.stringify({ text: docText }),
     });
 
-    alert("上传成功");
+    alert('上传成功');
   };
   return (
     <main className="flex h-screen flex-col">
@@ -95,8 +109,7 @@ export default function Home() {
           onChange={(e) => setDocText(e.target.value)}
           placeholder="粘贴你的文档内容"
         />
-
-<button onClick={uploadDoc}>上传文档</button>
+        <button onClick={uploadDoc}>上传文档</button>
         <button
           onClick={handleNewChat}
           className="rounded-lg bg-blue-500 px-4 py-2 text-white transition-colors hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
