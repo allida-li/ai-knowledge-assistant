@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import ChatMessage from './components/chatMessage';
-import ChatInput from './components/chatInput';
+import ChatInput from './components/chatPanel';
+import ChatBoxDashboard from './components/chatPanel';
+import Sidebar from './components/sidebar';
+import ResultsPanel from './components/resultsPanel';
+import ChatPanel from './components/chatPanel';
 
 interface Message {
   id: string;
@@ -99,51 +103,67 @@ export default function Home() {
     alert('上传成功');
   };
   return (
-    <main className="flex h-screen flex-col">
-      {/* 头部 */}
-      <div className="flex items-center justify-between border-b bg-white px-6 py-4">
-        <h1 className="text-xl font-semibold text-gray-800">AI 聊天助手</h1>
-        {/* 文档上传区域 */}
-        <textarea
-          value={docText}
-          onChange={(e) => setDocText(e.target.value)}
-          placeholder="粘贴你的文档内容"
-        />
-        <button onClick={uploadDoc}>上传文档</button>
-        <button
-          onClick={handleNewChat}
-          className="rounded-lg bg-blue-500 px-4 py-2 text-white transition-colors hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-        >
-          新对话
-        </button>
+    // <main className="flex h-screen flex-col">
+    //   {/* 头部 */}
+    //   <div className="flex items-center justify-between border-b bg-white px-6 py-4">
+    //     <h1 className="text-xl font-semibold text-gray-800">AI 聊天助手</h1>
+    //     {/* 文档上传区域 */}
+    //     <textarea
+    //       value={docText}
+    //       onChange={(e) => setDocText(e.target.value)}
+    //       placeholder="粘贴你的文档内容"
+    //     />
+    //     <button onClick={uploadDoc}>上传文档</button>
+    //     <button
+    //       onClick={handleNewChat}
+    //       className="rounded-lg bg-blue-500 px-4 py-2 text-white transition-colors hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+    //     >
+    //       新对话
+    //     </button>
+    //   </div>
+
+    //   {/* 消息列表 */}
+    //   <div className="flex-1 overflow-y-auto bg-gray-50 p-4">
+    //     <div className="mx-auto max-w-4xl space-y-4">
+    //       {messages.map((message) => (
+    //         <ChatMessage key={message.id} message={message} />
+    //       ))}
+    //       {isLoading && (
+    //         <div className="flex justify-start">
+    //           <div className="rounded-lg bg-white p-4 shadow-sm">
+    //             <div className="flex space-x-2">
+    //               <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400"></div>
+    //               <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '0.2s' }}></div>
+    //               <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '0.4s' }}></div>
+    //             </div>
+    //           </div>
+    //         </div>
+    //       )}
+    //     </div>
+    //   </div>
+
+    //   {/* 输入区域 */}
+    //   <div className="border-t bg-white p-4">
+    //     <div className="mx-auto max-w-4xl">
+    //       <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
+    //     </div>
+    //   </div>
+    // </main>
+       <div className="size-full flex bg-gray-50 min-w-[1440px] max-h-screen overflow-scroll">
+      {/* Sidebar - 256px fixed width */}
+      <div className="w-64 bg-white flex-shrink-0">
+        <Sidebar />
       </div>
 
-      {/* 消息列表 */}
-      <div className="flex-1 overflow-y-auto bg-gray-50 p-4">
-        <div className="mx-auto max-w-4xl space-y-4">
-          {messages.map((message) => (
-            <ChatMessage key={message.id} message={message} />
-          ))}
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="rounded-lg bg-white p-4 shadow-sm">
-                <div className="flex space-x-2">
-                  <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400"></div>
-                  <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '0.2s' }}></div>
-                  <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '0.4s' }}></div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+      {/* Left Panel - Chat - flexible width */}
+      <div className="flex-1 bg-white border-r border-transparent">
+        <ChatPanel />
       </div>
 
-      {/* 输入区域 */}
-      <div className="border-t bg-white p-4">
-        <div className="mx-auto max-w-4xl">
-          <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
-        </div>
+      {/* Right Panel - Knowledge Results - 420px fixed width */}
+      <div className="w-[420px] bg-gray-50 flex-shrink-0">
+        <ResultsPanel />
       </div>
-    </main>
+    </div>
   );
 }
