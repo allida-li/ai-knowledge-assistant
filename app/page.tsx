@@ -8,6 +8,7 @@ import Sidebar from './components/sidebar';
 import ResultsPanel from './components/resultsPanel';
 import ChatPanel from './components/chatPanel';
 
+
 interface Message {
   id: string;
   text: string;
@@ -33,75 +34,75 @@ const createMessage = (
 });
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [docText, setDocText] = useState('');
+  // const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE]);
+  // const [isLoading, setIsLoading] = useState(false);
+  // const [docText, setDocText] = useState('');
 
-  useEffect(() => {
-    setMessages((prev) => {
-      if (prev.length !== 1 || prev[0].id !== INITIAL_MESSAGE.id) {
-        return prev;
-      }
+  // useEffect(() => {
+  //   setMessages((prev) => {
+  //     if (prev.length !== 1 || prev[0].id !== INITIAL_MESSAGE.id) {
+  //       return prev;
+  //     }
 
-      return [
-        {
-          ...INITIAL_MESSAGE,
-          timestamp: new Date(),
-        },
-      ];
-    });
-  }, []);
+  //     return [
+  //       {
+  //         ...INITIAL_MESSAGE,
+  //         timestamp: new Date(),
+  //       },
+  //     ];
+  //   });
+  // }, []);
 
-  const handleSendMessage = async (messageText: string) => {
-    const trimmedMessage = messageText.trim();
-    if (!trimmedMessage || isLoading) return;
+  // const handleSendMessage = async (messageText: string) => {
+  //   const trimmedMessage = messageText.trim();
+  //   if (!trimmedMessage || isLoading) return;
 
-    setMessages((prev) => [...prev, createMessage(trimmedMessage, 'user')]);
-    setIsLoading(true);
+  //   setMessages((prev) => [...prev, createMessage(trimmedMessage, 'user')]);
+  //   setIsLoading(true);
 
-    try {
-      const response = await fetch('http://localhost:3001/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ question: trimmedMessage }),
-      });
+  //   try {
+  //     const response = await fetch('http://localhost:3001/api/chat', {
+  //       method: 'POST',
+  //       headers: {
+  //         'Content-Type': 'application/json',
+  //       },
+  //       body: JSON.stringify({ question: trimmedMessage }),
+  //     });
 
-      if (!response.ok) {
-        throw new Error('Chat request failed');
-      }
+  //     if (!response.ok) {
+  //       throw new Error('Chat request failed');
+  //     }
 
-      const data = await response.json();
-      setMessages((prev) => [
-        ...prev,
-        createMessage(data.answer ?? '暂时没有获取到回复，请稍后再试。', 'bot'),
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        createMessage('发送消息失败，请检查服务是否启动后重试。', 'bot'),
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  //     const data = await response.json();
+  //     setMessages((prev) => [
+  //       ...prev,
+  //       createMessage(data.answer ?? '暂时没有获取到回复，请稍后再试。', 'bot'),
+  //     ]);
+  //   } catch {
+  //     setMessages((prev) => [
+  //       ...prev,
+  //       createMessage('发送消息失败，请检查服务是否启动后重试。', 'bot'),
+  //     ]);
+  //   } finally {
+  //     setIsLoading(false);
+  //   }
+  // };
 
-  const handleNewChat = () => {
-    setMessages([INITIAL_MESSAGE]);
-  };
+  // const handleNewChat = () => {
+  //   setMessages([INITIAL_MESSAGE]);
+  // };
 
-  const uploadDoc = async () => {
-    await fetch('http://localhost:3001/api/upload', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ text: docText }),
-    });
+  // const uploadDoc = async () => {
+  //   await fetch('http://localhost:3001/api/upload', {
+  //     method: 'POST',
+  //     headers: {
+  //       'Content-Type': 'application/json',
+  //     },
+  //     body: JSON.stringify({ text: docText }),
+  //   });
 
-    alert('上传成功');
-  };
+  //   alert('上传成功');
+  // };
   return (
     // <main className="flex h-screen flex-col">
     //   {/* 头部 */}
