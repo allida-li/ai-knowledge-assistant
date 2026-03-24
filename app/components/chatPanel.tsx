@@ -24,6 +24,7 @@ interface UploadedFile {
 }
 
 const API_BASE_URL = 'http://localhost:3001';
+const UTF8_CHARSET = 'charset=utf-8';
 
 const createMessage = (
   content: string,
@@ -43,6 +44,34 @@ const formatFileSize = (bytes: number) => {
 
 const getFileIcon = (type: string) =>
   type.startsWith('image/') ? ImageIcon : FileText;
+
+const isTextFile = (file: File) => {
+  if (file.type.startsWith('text/')) return true;
+
+  return [
+    'application/json',
+    'application/xml',
+    'application/javascript',
+    'image/svg+xml',
+  ].includes(file.type);
+};
+
+const toUtf8File = async (file: File) => {
+  if (!isTextFile(file)) {
+    return file;
+  }
+
+  const text = await file.text();
+  const utf8Bytes = new TextEncoder().encode(text);
+  const type = file.type
+    ? `${file.type.split(';')[0]};${UTF8_CHARSET}`
+    : `text/plain;${UTF8_CHARSET}`;
+
+  return new File([utf8Bytes], file.name, {
+    type,
+    lastModified: file.lastModified,
+  });
+};
 
 const ChatPanel = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -65,7 +94,11 @@ const ChatPanel = () => {
   const uploadFiles = async (files: UploadedFile[]) => {
     const formData = new FormData();
 
-    files.forEach(({ file }) => {
+    const normalizedFiles = await Promise.all(
+      files.map(async ({ file }) => toUtf8File(file)),
+    );
+
+    normalizedFiles.forEach((file) => {
       formData.append('files', file);
     });
 
@@ -83,7 +116,7 @@ const ChatPanel = () => {
     const response = await fetch(`${API_BASE_URL}/api/upload`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
       },
       body: JSON.stringify({ text }),
     });
