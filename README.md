@@ -1,4 +1,4 @@
-# ![UI Design](./app/docs/images/logo.png)AI Knowledge Assistant
+# AI Knowledge Assistant
 
 一个基于 **RAG（Retrieval-Augmented Generation）** 的知识助手应用，支持上传文本/文档，并基于内容进行智能问答。
 
