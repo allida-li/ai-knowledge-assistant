@@ -79,6 +79,8 @@ const ChatPanel = () => {
   const [input, setInput] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const typingQueueRef = useRef<Record<string, string>>({});
+  const typingActiveRef = useRef<Record<string, boolean>>({});
 
   const hasStartedConversation = messages.length > 0;
 
@@ -114,7 +116,7 @@ const ChatPanel = () => {
     if (response.status === 200) {
       setMessages((prev) => [
         ...prev,
-        createMessage('文件上传成功，可以开始提问', 'bot'),
+        createMessage('文件上传成功，可开始提问', 'bot'),
       ]);
     }
   };
@@ -140,27 +142,191 @@ const ChatPanel = () => {
     }
   };
 
+  const appendToMessage = (messageId: string, chunk: string) => {
+    if (!chunk) return;
+
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === messageId
+          ? { ...message, content: `${message.content}${chunk}` }
+          : message,
+      ),
+    );
+  };
+
+  const appendToMessageWithTyping = async (messageId: string, text: string, speed: number = 30) => {
+    // Add text to queue
+    typingQueueRef.current[messageId] = (typingQueueRef.current[messageId] ?? '') + text;
+
+    // If typing is already active for this message, don't start another process
+    if (typingActiveRef.current[messageId]) {
+      return;
+    }
+
+    typingActiveRef.current[messageId] = true;
+
+    // Process typing character by character
+    while (typingQueueRef.current[messageId] && typingQueueRef.current[messageId].length > 0) {
+      const char = typingQueueRef.current[messageId][0];
+      typingQueueRef.current[messageId] = typingQueueRef.current[messageId].slice(1);
+
+      appendToMessage(messageId, char);
+
+      // Add small delay for typing effect
+      await new Promise((resolve) => setTimeout(resolve, speed));
+    }
+
+    typingActiveRef.current[messageId] = false;
+  };
+
+  const parseNDJsonLine = (line: string) => {
+    try {
+      const parsed = JSON.parse(line) as {
+        type?: string;
+        delta?: string;
+        answer?: string;
+        content?: string;
+      };
+
+      // For streaming, only extract delta to avoid duplication
+      if (parsed.type === 'delta' && parsed.delta) {
+        return parsed.delta;
+      }
+
+      // Skip 'done' and 'start' types - they shouldn't add content
+      // Only return content if there's no type specified (fallback for non-streaming)
+      if (!parsed.type && (parsed.answer || parsed.content)) {
+        return parsed.answer ?? parsed.content ?? '';
+      }
+
+      // Skip all other types (done, start, etc.)
+      return '';
+    } catch {
+      return line;
+    }
+  };
+
   const sendChatMessage = async (content: string) => {
     const userMessage = createMessage(content, 'user');
+    const botMessage = createMessage('', 'bot');
+
     setMessages((prev) => [...prev, userMessage]);
 
     const response = await fetch(`${API_BASE_URL}/api/chat`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
       },
-      body: JSON.stringify({ question: content }),
+      body: JSON.stringify({ question: content, stream: true }),
     });
 
     if (!response.ok) {
       throw new Error('请求失败');
     }
 
-    const data = await response.json();
-    setMessages((prev) => [
-      ...prev,
-      createMessage(data.answer ?? '暂时没有获取到回复，请稍后再试。', 'bot'),
-    ]);
+    setMessages((prev) => [...prev, botMessage]);
+
+    if (!response.body) {
+      const text = await response.text();
+      appendToMessage(botMessage.id, text || '暂时没有获取到回复，请稍后再试。');
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    const contentType = response.headers.get('content-type') ?? '';
+    let pendingChunk = '';
+    let accumulatedAnswer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        pendingChunk += decoder.decode(value, { stream: true });
+
+        if (contentType.includes('application/x-ndjson')) {
+          // Split by newline and process complete lines
+          const lines = pendingChunk.split('\n');
+          // Keep the last incomplete line in pendingChunk
+          pendingChunk = lines.pop() ?? '';
+
+          lines.forEach((line) => {
+            if (line.trim()) {
+              const parsed = JSON.parse(line) as {
+                type?: string;
+                delta?: string;
+                answer?: string;
+              };
+
+              // For delta messages, extract only the new content and add with typing effect
+              if (parsed.type === 'delta' && parsed.delta) {
+                void appendToMessageWithTyping(botMessage.id, parsed.delta, 20);
+                accumulatedAnswer += parsed.delta;
+              }
+              // For done messages, ensure complete answer is added if it's longer
+              else if (parsed.type === 'done' && parsed.answer) {
+                if (parsed.answer.length > accumulatedAnswer.length) {
+                  // If the final answer is longer, append the missing part with typing effect
+                  const missingPart = parsed.answer.slice(accumulatedAnswer.length);
+                  if (missingPart) {
+                    void appendToMessageWithTyping(botMessage.id, missingPart, 20);
+                  }
+                }
+              }
+            }
+          });
+
+          continue;
+        }
+
+        if (contentType.includes('text/event-stream')) {
+          // Handle SSE format if needed
+          const events = pendingChunk.split('\n\n');
+          pendingChunk = events.pop() ?? '';
+
+          events.forEach((eventChunk) => {
+            const lines = eventChunk
+              .split('\n')
+              .filter((line) => line.startsWith('data:'))
+              .map((line) => line.slice(5).trimStart());
+
+            lines.forEach((line) => {
+              if (line && line !== '[DONE]') {
+                const text = parseNDJsonLine(line);
+                if (text) {
+                  void appendToMessageWithTyping(botMessage.id, text, 20);
+                }
+              }
+            });
+          });
+
+          continue;
+        }
+
+        // Fallback: append raw chunk with typing effect
+        if (pendingChunk) {
+          void appendToMessageWithTyping(botMessage.id, pendingChunk, 20);
+          pendingChunk = '';
+        }
+      }
+
+      // Handle any remaining data
+      const finalChunk = decoder.decode();
+      if (finalChunk) {
+        pendingChunk += finalChunk;
+      }
+
+      if (pendingChunk.trim()) {
+        const text = parseNDJsonLine(pendingChunk);
+        if (text) {
+          void appendToMessageWithTyping(botMessage.id, text, 20);
+        }
+      }
+    } catch (error) {
+      console.error('Stream reading error:', error);
+      appendToMessage(botMessage.id, '流式读取出错，请重试。');
+    }
   };
 
   const handleSend = async () => {
