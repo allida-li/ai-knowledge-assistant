@@ -13,6 +13,7 @@ interface Message {
   sender: 'user' | 'bot';
   content: string;
   timestamp: Date;
+  isThinking?: boolean;
 }
 
 interface UploadedFile {
@@ -29,11 +30,13 @@ const UTF8_CHARSET = 'charset=utf-8';
 const createMessage = (
   content: string,
   sender: Message['sender'],
+  options?: Partial<Pick<Message, 'isThinking'>>,
 ): Message => ({
   id: crypto.randomUUID(),
   sender,
   content,
   timestamp: new Date(),
+  ...options,
 });
 
 const formatFileSize = (bytes: number) => {
@@ -79,8 +82,6 @@ const ChatPanel = () => {
   const [input, setInput] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const typingQueueRef = useRef<Record<string, string>>({});
-  const typingActiveRef = useRef<Record<string, boolean>>({});
 
   const hasStartedConversation = messages.length > 0;
 
@@ -148,35 +149,34 @@ const ChatPanel = () => {
     setMessages((prev) =>
       prev.map((message) =>
         message.id === messageId
-          ? { ...message, content: `${message.content}${chunk}` }
+          ? (() => {
+            const nextContent = message.isThinking
+              ? chunk
+              : `${message.content}${chunk}`;
+
+            return {
+              ...message,
+              content: nextContent,
+              isThinking: false,
+            };
+          })()
           : message,
       ),
     );
   };
 
-  const appendToMessageWithTyping = async (messageId: string, text: string, speed: number = 30) => {
-    // Add text to queue
-    typingQueueRef.current[messageId] = (typingQueueRef.current[messageId] ?? '') + text;
-
-    // If typing is already active for this message, don't start another process
-    if (typingActiveRef.current[messageId]) {
-      return;
-    }
-
-    typingActiveRef.current[messageId] = true;
-
-    // Process typing character by character
-    while (typingQueueRef.current[messageId] && typingQueueRef.current[messageId].length > 0) {
-      const char = typingQueueRef.current[messageId][0];
-      typingQueueRef.current[messageId] = typingQueueRef.current[messageId].slice(1);
-
-      appendToMessage(messageId, char);
-
-      // Add small delay for typing effect
-      await new Promise((resolve) => setTimeout(resolve, speed));
-    }
-
-    typingActiveRef.current[messageId] = false;
+  const replaceMessageContent = (messageId: string, content: string) => {
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === messageId
+          ? {
+            ...message,
+            content,
+            isThinking: false,
+          }
+          : message,
+      ),
+    );
   };
 
   const parseNDJsonLine = (line: string) => {
@@ -208,7 +208,7 @@ const ChatPanel = () => {
 
   const sendChatMessage = async (content: string) => {
     const userMessage = createMessage(content, 'user');
-    const botMessage = createMessage('', 'bot');
+    const botMessage = createMessage('', 'bot', { isThinking: true });
 
     setMessages((prev) => [...prev, userMessage]);
 
@@ -259,20 +259,13 @@ const ChatPanel = () => {
                 answer?: string;
               };
 
-              // For delta messages, extract only the new content and add with typing effect
               if (parsed.type === 'delta' && parsed.delta) {
-                void appendToMessageWithTyping(botMessage.id, parsed.delta, 20);
+                appendToMessage(botMessage.id, parsed.delta);
                 accumulatedAnswer += parsed.delta;
               }
-              // For done messages, ensure complete answer is added if it's longer
               else if (parsed.type === 'done' && parsed.answer) {
-                if (parsed.answer.length > accumulatedAnswer.length) {
-                  // If the final answer is longer, append the missing part with typing effect
-                  const missingPart = parsed.answer.slice(accumulatedAnswer.length);
-                  if (missingPart) {
-                    void appendToMessageWithTyping(botMessage.id, missingPart, 20);
-                  }
-                }
+                replaceMessageContent(botMessage.id, parsed.answer);
+                accumulatedAnswer = parsed.answer;
               }
             }
           });
@@ -295,7 +288,8 @@ const ChatPanel = () => {
               if (line && line !== '[DONE]') {
                 const text = parseNDJsonLine(line);
                 if (text) {
-                  void appendToMessageWithTyping(botMessage.id, text, 20);
+                  appendToMessage(botMessage.id, text);
+                  accumulatedAnswer += text;
                 }
               }
             });
@@ -304,9 +298,11 @@ const ChatPanel = () => {
           continue;
         }
 
-        // Fallback: append raw chunk with typing effect
+        // Fallback: append raw chunk directly.
         if (pendingChunk) {
-          void appendToMessageWithTyping(botMessage.id, pendingChunk, 20);
+          appendToMessage(botMessage.id, pendingChunk);
+          accumulatedAnswer += pendingChunk;
+
           pendingChunk = '';
         }
       }
@@ -318,9 +314,26 @@ const ChatPanel = () => {
       }
 
       if (pendingChunk.trim()) {
-        const text = parseNDJsonLine(pendingChunk);
-        if (text) {
-          void appendToMessageWithTyping(botMessage.id, text, 20);
+        if (contentType.includes('application/x-ndjson')) {
+          const parsed = JSON.parse(pendingChunk) as {
+            type?: string;
+            delta?: string;
+            answer?: string;
+          };
+
+          if (parsed.type === 'delta' && parsed.delta) {
+            appendToMessage(botMessage.id, parsed.delta);
+            accumulatedAnswer += parsed.delta;
+          } else if (parsed.type === 'done' && parsed.answer) {
+            replaceMessageContent(botMessage.id, parsed.answer);
+            accumulatedAnswer = parsed.answer;
+          }
+        } else {
+          const text = parseNDJsonLine(pendingChunk);
+          if (text) {
+            appendToMessage(botMessage.id, text);
+            accumulatedAnswer += text;
+          }
         }
       }
     } catch (error) {
@@ -404,7 +417,18 @@ const ChatPanel = () => {
                   }`}
               >
                 <p className="whitespace-pre-line text-[15px] leading-relaxed">
-                  {message.content}
+                  {message.isThinking ? (
+                    <span className="inline-flex items-center gap-1.5 text-gray-500">
+                      <span>正在思考中</span>
+                      <span className="flex gap-1">
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" />
+                      </span>
+                    </span>
+                  ) : (
+                    message.content
+                  )}
                 </p>
                 <p
                   className={`mt-2 text-xs ${message.sender === 'user'
