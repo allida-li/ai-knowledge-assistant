@@ -110,6 +110,13 @@ const ChatPanel = () => {
     if (!response.ok) {
       throw new Error('文件上传失败');
     }
+
+    if (response.status === 200) {
+      setMessages((prev) => [
+        ...prev,
+        createMessage('文件上传成功，可以开始提问', 'bot'),
+      ]);
+    }
   };
 
   const uploadText = async (text: string) => {
@@ -123,6 +130,13 @@ const ChatPanel = () => {
 
     if (!response.ok) {
       throw new Error('文本上传失败');
+    }
+
+    if (response.status === 200) {
+      setMessages((prev) => [
+        ...prev,
+        createMessage('文档已准备完成，可以开始提问', 'bot'),
+      ]);
     }
   };
 
