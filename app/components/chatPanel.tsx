@@ -1,20 +1,19 @@
 import { useRef, useState } from 'react';
+import type { ChangeEvent, KeyboardEvent } from 'react';
 import {
   ArrowUp,
   FileText,
   Image as ImageIcon,
   Paperclip,
   Sparkles,
+  Upload,
   X,
 } from 'lucide-react';
-
-interface Message {
-  id: string;
-  sender: 'user' | 'bot';
-  content: string;
-  timestamp: Date;
-  isThinking?: boolean;
-}
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { apiUrl } from '../lib/api';
+import { buildKnowledgeResults } from '../lib/mockKnowledge';
+import type { ComposerMode, KnowledgeDocument, Message } from '../types';
 
 interface UploadedFile {
   id: string;
@@ -24,7 +23,30 @@ interface UploadedFile {
   file: File;
 }
 
-const API_BASE_URL = 'http://localhost:3001';
+interface UploadFilePreview {
+  fileName: string;
+  mimetype: string;
+  preview: string;
+  chunksAdded: number;
+}
+
+interface UploadFilesResponse {
+  filePreviews?: UploadFilePreview[];
+}
+
+interface UploadTextResponse {
+  summary?: string;
+  markdown?: string;
+  answer?: string;
+  content?: string;
+}
+
+interface ChatPanelProps {
+  messages: Message[];
+  onMessagesChange: (updater: (messages: Message[]) => Message[]) => void;
+  onDocumentsChange: (documents: KnowledgeDocument[]) => void;
+}
+
 const UTF8_CHARSET = 'charset=utf-8';
 
 const createMessage = (
@@ -35,7 +57,7 @@ const createMessage = (
   id: crypto.randomUUID(),
   sender,
   content,
-  timestamp: new Date(),
+  timestamp: new Date().toISOString(),
   ...options,
 });
 
@@ -47,6 +69,44 @@ const formatFileSize = (bytes: number) => {
 
 const getFileIcon = (type: string) =>
   type.startsWith('image/') ? ImageIcon : FileText;
+
+const createFileUploadDetails = (files: UploadedFile[]) =>
+  files
+    .map((file, index) =>
+      [
+        `${index + 1}. ${file.name}`,
+        `类型：${file.type || '未知类型'}`,
+        `大小：${formatFileSize(file.size)}`,
+      ].join('\n'),
+    )
+    .join('\n\n');
+
+const createFileUploadSummary = (files: UploadedFile[], summaries: string[]) => {
+  return files
+    .map((file, index) =>
+      [
+        `${index + 1}. ${file.name}`,
+        `类型：${file.type || '未知类型'}`,
+        `大小：${formatFileSize(file.size)}`,
+        `摘要：${summaries[index] || '未提取到可用摘要'}`,
+      ].join('\n'),
+    )
+    .join('\n\n');
+};
+
+const createTextUploadDetails = (text: string) => text;
+
+const createTextUploadSummary = (text: string) => {
+  const normalizedText = text.trim().replace(/\s+/g, ' ');
+  const summary = normalizedText.slice(0, 180);
+  const suffix = normalizedText.length > 180 ? '...' : '';
+
+  return `> ${summary || '未提取到可用摘要'}${suffix}\n`;
+};
+
+const getMarkdownSummaryFromResponse = (data: UploadTextResponse) => {
+  return data.markdown ?? data.summary ?? data.answer ?? data.content ?? '';
+};
 
 const isTextFile = (file: File) => {
   if (file.type.startsWith('text/')) return true;
@@ -76,22 +136,106 @@ const toUtf8File = async (file: File) => {
   });
 };
 
-const ChatPanel = () => {
-  const [messages, setMessages] = useState<Message[]>([]);
+const getLocalFileSummary = async (file: UploadedFile) => {
+  if (!isTextFile(file.file)) {
+    return '';
+  }
+
+  const normalizedText = (await file.file.text()).trim().replace(/\s+/g, ' ');
+
+  if (!normalizedText) {
+    return '';
+  }
+
+  const summary = normalizedText.slice(0, 180);
+  return normalizedText.length > 180 ? `${summary}...` : summary;
+};
+
+const parseNDJsonLine = (line: string) => {
+  try {
+    const parsed = JSON.parse(line) as {
+      type?: string;
+      delta?: string;
+      answer?: string;
+      content?: string;
+    };
+
+    if (parsed.type === 'delta' && parsed.delta) {
+      return parsed.delta;
+    }
+
+    if (!parsed.type && (parsed.answer || parsed.content)) {
+      return parsed.answer ?? parsed.content ?? '';
+    }
+
+    return '';
+  } catch {
+    return line;
+  }
+};
+
+const formatTimestamp = (timestamp: string) =>
+  new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+const ChatPanel = ({
+  messages,
+  onMessagesChange,
+  onDocumentsChange,
+}: ChatPanelProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [input, setInput] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [composerMode, setComposerMode] = useState<ComposerMode>('ask');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hasStartedConversation = messages.length > 0;
+  const isUploadAction = composerMode === 'ingest' || uploadedFiles.length > 0;
+
+  const updateMessages = (updater: (currentMessages: Message[]) => Message[]) => {
+    onMessagesChange(updater);
+  };
 
   const resetComposer = () => {
     setInput('');
     setUploadedFiles([]);
+    setComposerMode('ask');
 
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+  };
+
+  const appendToMessage = (messageId: string, chunk: string) => {
+    if (!chunk) return;
+
+    updateMessages((currentMessages) =>
+      currentMessages.map((message) =>
+        message.id === messageId
+          ? {
+            ...message,
+            content: message.isThinking ? chunk : `${message.content}${chunk}`,
+            isThinking: false,
+          }
+          : message,
+      ),
+    );
+  };
+
+  const replaceMessageContent = (messageId: string, content: string) => {
+    updateMessages((currentMessages) =>
+      currentMessages.map((message) =>
+        message.id === messageId
+          ? {
+            ...message,
+            content,
+            isThinking: false,
+          }
+          : message,
+      ),
+    );
   };
 
   const uploadFiles = async (files: UploadedFile[]) => {
@@ -105,7 +249,7 @@ const ChatPanel = () => {
       formData.append('files', file);
     });
 
-    const response = await fetch(`${API_BASE_URL}/api/uploadFiles`, {
+    const response = await fetch(apiUrl('/api/uploadFiles'), {
       method: 'POST',
       body: formData,
     });
@@ -114,105 +258,62 @@ const ChatPanel = () => {
       throw new Error('文件上传失败');
     }
 
-    if (response.status === 200) {
-      setMessages((prev) => [
-        ...prev,
-        createMessage('文件上传成功，可开始提问', 'bot'),
-      ]);
-    }
+    const data = (await response.json()) as UploadFilesResponse;
+    const localSummaries = await Promise.all(
+      files.map((file) => getLocalFileSummary(file)),
+    );
+
+    const mergedSummaries = files.map((file, index) => {
+      const preview = data.filePreviews?.find(
+        (item) => item.fileName === file.name,
+      )?.preview;
+
+      return preview || localSummaries[index] || '未提取到可用摘要';
+    });
+
+    updateMessages((currentMessages) => [
+      ...currentMessages,
+      createMessage(createFileUploadSummary(files, mergedSummaries), 'bot'),
+    ]);
+    onDocumentsChange(buildKnowledgeResults(files.map((file) => file.name).join(' ')));
   };
 
   const uploadText = async (text: string) => {
-    const response = await fetch(`${API_BASE_URL}/api/upload`, {
+    const response = await fetch(apiUrl('/api/upload'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({
+        text,
+        responseFormat: 'markdown',
+        summaryInstructions:
+          'Read the uploaded text, understand the meaning, and return only a concise markdown summary. Prefer blockquote, short bullets, and short sections when helpful. Do not wrap the result in code fences.',
+      }),
     });
 
     if (!response.ok) {
       throw new Error('文本上传失败');
     }
 
-    if (response.status === 200) {
-      setMessages((prev) => [
-        ...prev,
-        createMessage('文档已准备完成，可以开始提问', 'bot'),
-      ]);
-    }
-  };
+    const data = (await response.json()) as UploadTextResponse;
+    const markdownSummary = getMarkdownSummaryFromResponse(data).trim();
 
-  const appendToMessage = (messageId: string, chunk: string) => {
-    if (!chunk) return;
-
-    setMessages((prev) =>
-      prev.map((message) =>
-        message.id === messageId
-          ? (() => {
-            const nextContent = message.isThinking
-              ? chunk
-              : `${message.content}${chunk}`;
-
-            return {
-              ...message,
-              content: nextContent,
-              isThinking: false,
-            };
-          })()
-          : message,
-      ),
-    );
-  };
-
-  const replaceMessageContent = (messageId: string, content: string) => {
-    setMessages((prev) =>
-      prev.map((message) =>
-        message.id === messageId
-          ? {
-            ...message,
-            content,
-            isThinking: false,
-          }
-          : message,
-      ),
-    );
-  };
-
-  const parseNDJsonLine = (line: string) => {
-    try {
-      const parsed = JSON.parse(line) as {
-        type?: string;
-        delta?: string;
-        answer?: string;
-        content?: string;
-      };
-
-      // For streaming, only extract delta to avoid duplication
-      if (parsed.type === 'delta' && parsed.delta) {
-        return parsed.delta;
-      }
-
-      // Skip 'done' and 'start' types - they shouldn't add content
-      // Only return content if there's no type specified (fallback for non-streaming)
-      if (!parsed.type && (parsed.answer || parsed.content)) {
-        return parsed.answer ?? parsed.content ?? '';
-      }
-
-      // Skip all other types (done, start, etc.)
-      return '';
-    } catch {
-      return line;
-    }
+    updateMessages((currentMessages) => [
+      ...currentMessages,
+      createMessage(markdownSummary || createTextUploadSummary(text), 'bot'),
+    ]);
+    onDocumentsChange(buildKnowledgeResults(text));
   };
 
   const sendChatMessage = async (content: string) => {
     const userMessage = createMessage(content, 'user');
     const botMessage = createMessage('', 'bot', { isThinking: true });
 
-    setMessages((prev) => [...prev, userMessage]);
+    updateMessages((currentMessages) => [...currentMessages, userMessage]);
+    onDocumentsChange(buildKnowledgeResults(content));
 
-    const response = await fetch(`${API_BASE_URL}/api/chat`, {
+    const response = await fetch(apiUrl('/api/chat'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
@@ -224,7 +325,7 @@ const ChatPanel = () => {
       throw new Error('请求失败');
     }
 
-    setMessages((prev) => [...prev, botMessage]);
+    updateMessages((currentMessages) => [...currentMessages, botMessage]);
 
     if (!response.body) {
       const text = await response.text();
@@ -236,7 +337,6 @@ const ChatPanel = () => {
     const decoder = new TextDecoder('utf-8');
     const contentType = response.headers.get('content-type') ?? '';
     let pendingChunk = '';
-    let accumulatedAnswer = '';
 
     try {
       while (true) {
@@ -246,27 +346,24 @@ const ChatPanel = () => {
         pendingChunk += decoder.decode(value, { stream: true });
 
         if (contentType.includes('application/x-ndjson')) {
-          // Split by newline and process complete lines
           const lines = pendingChunk.split('\n');
-          // Keep the last incomplete line in pendingChunk
           pendingChunk = lines.pop() ?? '';
 
           lines.forEach((line) => {
-            if (line.trim()) {
-              const parsed = JSON.parse(line) as {
-                type?: string;
-                delta?: string;
-                answer?: string;
-              };
+            if (!line.trim()) {
+              return;
+            }
 
-              if (parsed.type === 'delta' && parsed.delta) {
-                appendToMessage(botMessage.id, parsed.delta);
-                accumulatedAnswer += parsed.delta;
-              }
-              else if (parsed.type === 'done' && parsed.answer) {
-                replaceMessageContent(botMessage.id, parsed.answer);
-                accumulatedAnswer = parsed.answer;
-              }
+            const parsed = JSON.parse(line) as {
+              type?: string;
+              delta?: string;
+              answer?: string;
+            };
+
+            if (parsed.type === 'delta' && parsed.delta) {
+              appendToMessage(botMessage.id, parsed.delta);
+            } else if (parsed.type === 'done' && parsed.answer) {
+              replaceMessageContent(botMessage.id, parsed.answer);
             }
           });
 
@@ -274,22 +371,20 @@ const ChatPanel = () => {
         }
 
         if (contentType.includes('text/event-stream')) {
-          // Handle SSE format if needed
           const events = pendingChunk.split('\n\n');
           pendingChunk = events.pop() ?? '';
 
           events.forEach((eventChunk) => {
-            const lines = eventChunk
+            const eventLines = eventChunk
               .split('\n')
               .filter((line) => line.startsWith('data:'))
               .map((line) => line.slice(5).trimStart());
 
-            lines.forEach((line) => {
+            eventLines.forEach((line) => {
               if (line && line !== '[DONE]') {
                 const text = parseNDJsonLine(line);
                 if (text) {
                   appendToMessage(botMessage.id, text);
-                  accumulatedAnswer += text;
                 }
               }
             });
@@ -298,43 +393,40 @@ const ChatPanel = () => {
           continue;
         }
 
-        // Fallback: append raw chunk directly.
         if (pendingChunk) {
           appendToMessage(botMessage.id, pendingChunk);
-          accumulatedAnswer += pendingChunk;
-
           pendingChunk = '';
         }
       }
 
-      // Handle any remaining data
       const finalChunk = decoder.decode();
       if (finalChunk) {
         pendingChunk += finalChunk;
       }
 
-      if (pendingChunk.trim()) {
-        if (contentType.includes('application/x-ndjson')) {
-          const parsed = JSON.parse(pendingChunk) as {
-            type?: string;
-            delta?: string;
-            answer?: string;
-          };
+      if (!pendingChunk.trim()) {
+        return;
+      }
 
-          if (parsed.type === 'delta' && parsed.delta) {
-            appendToMessage(botMessage.id, parsed.delta);
-            accumulatedAnswer += parsed.delta;
-          } else if (parsed.type === 'done' && parsed.answer) {
-            replaceMessageContent(botMessage.id, parsed.answer);
-            accumulatedAnswer = parsed.answer;
-          }
-        } else {
-          const text = parseNDJsonLine(pendingChunk);
-          if (text) {
-            appendToMessage(botMessage.id, text);
-            accumulatedAnswer += text;
-          }
+      if (contentType.includes('application/x-ndjson')) {
+        const parsed = JSON.parse(pendingChunk) as {
+          type?: string;
+          delta?: string;
+          answer?: string;
+        };
+
+        if (parsed.type === 'delta' && parsed.delta) {
+          appendToMessage(botMessage.id, parsed.delta);
+        } else if (parsed.type === 'done' && parsed.answer) {
+          replaceMessageContent(botMessage.id, parsed.answer);
         }
+
+        return;
+      }
+
+      const text = parseNDJsonLine(pendingChunk);
+      if (text) {
+        appendToMessage(botMessage.id, text);
       }
     } catch (error) {
       console.error('Stream reading error:', error);
@@ -350,12 +442,20 @@ const ChatPanel = () => {
 
     try {
       if (uploadedFiles.length > 0) {
+        updateMessages((currentMessages) => [
+          ...currentMessages,
+          createMessage(createFileUploadDetails(uploadedFiles), 'user'),
+        ]);
         await uploadFiles(uploadedFiles);
         resetComposer();
         return;
       }
 
-      if (trimmedInput.length > 100) {
+      if (composerMode === 'ingest') {
+        updateMessages((currentMessages) => [
+          ...currentMessages,
+          createMessage(createTextUploadDetails(trimmedInput), 'user'),
+        ]);
         await uploadText(trimmedInput);
         resetComposer();
         return;
@@ -364,8 +464,8 @@ const ChatPanel = () => {
       await sendChatMessage(trimmedInput);
       resetComposer();
     } catch {
-      setMessages((prev) => [
-        ...prev,
+      updateMessages((currentMessages) => [
+        ...currentMessages,
         createMessage('发送消息失败，请检查服务是否启动后重试。', 'bot'),
       ]);
     } finally {
@@ -373,8 +473,8 @@ const ChatPanel = () => {
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
+  const handleFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
     if (!files) return;
 
     const newFiles: UploadedFile[] = Array.from(files).map((file) => ({
@@ -385,25 +485,28 @@ const ChatPanel = () => {
       file,
     }));
 
-    setUploadedFiles((prev) => [...prev, ...newFiles]);
-    e.target.value = '';
+    setUploadedFiles((currentFiles) => [...currentFiles, ...newFiles]);
+    setComposerMode('ingest');
+    event.target.value = '';
   };
 
-  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       void handleSend();
     }
   };
 
   const removeFile = (fileId: string) => {
-    setUploadedFiles((prev) => prev.filter((file) => file.id !== fileId));
+    setUploadedFiles((currentFiles) =>
+      currentFiles.filter((file) => file.id !== fileId),
+    );
   };
 
   return (
     <div className="flex h-full flex-col">
       {hasStartedConversation && (
-        <div className="flex-1 space-y-6 overflow-y-auto px-[34px] py-6">
+        <div className="flex-1 space-y-6 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
           {messages.map((message) => (
             <div
               key={message.id}
@@ -411,35 +514,77 @@ const ChatPanel = () => {
                 }`}
             >
               <div
-                className={`max-w-[75%] rounded-2xl px-5 py-3.5 ${message.sender === 'user'
+                className={`max-w-[88%] rounded-2xl px-4 py-3.5 sm:max-w-[78%] sm:px-5 ${message.sender === 'user'
                   ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg shadow-orange-500/25'
                   : 'bg-gray-100 text-gray-900'
                   }`}
               >
-                <p className="whitespace-pre-line text-[15px] leading-relaxed">
+                <div className="text-[15px] leading-relaxed">
                   {message.isThinking ? (
                     <span className="inline-flex items-center gap-1.5 text-gray-500">
-                      <span>正在思考中</span>
+                      <span>AI正在思考中</span>
                       <span className="flex gap-1">
                         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
                         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
                         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" />
                       </span>
                     </span>
+                  ) : message.sender === 'bot' ? (
+                    <div className="space-y-3">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }) => (
+                            <p className="whitespace-pre-wrap leading-7 text-gray-800">
+                              {children}
+                            </p>
+                          ),
+                          ul: ({ children }) => (
+                            <ul className="list-disc space-y-2 pl-5 text-gray-800">
+                              {children}
+                            </ul>
+                          ),
+                          ol: ({ children }) => (
+                            <ol className="list-decimal space-y-2 pl-5 text-gray-800">
+                              {children}
+                            </ol>
+                          ),
+                          li: ({ children }) => <li className="pl-1">{children}</li>,
+                          blockquote: ({ children }) => (
+                            <blockquote className="rounded-r-2xl border-l-4 border-orange-400 bg-orange-50/80 px-4 py-3 text-[15px] italic text-orange-900 shadow-sm">
+                              {children}
+                            </blockquote>
+                          ),
+                          h1: ({ children }) => (
+                            <h1 className="text-lg font-semibold text-gray-900">{children}</h1>
+                          ),
+                          h2: ({ children }) => (
+                            <h2 className="text-base font-semibold text-gray-900">{children}</h2>
+                          ),
+                          h3: ({ children }) => (
+                            <h3 className="text-sm font-semibold text-gray-900">{children}</h3>
+                          ),
+                          code: ({ children }) => (
+                            <code className="rounded-md bg-gray-200 px-1.5 py-0.5 text-[13px] text-gray-900">
+                              {children}
+                            </code>
+                          ),
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
                   ) : (
-                    message.content
+                    <div className="whitespace-pre-wrap break-words text-white">
+                      {message.content}
+                    </div>
                   )}
-                </p>
+                </div>
                 <p
-                  className={`mt-2 text-xs ${message.sender === 'user'
-                    ? 'text-orange-100'
-                    : 'text-gray-500'
+                  className={`mt-2 text-xs ${message.sender === 'user' ? 'text-orange-100' : 'text-gray-500'
                     }`}
                 >
-                  {message.timestamp.toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
+                  {formatTimestamp(message.timestamp)}
                 </p>
               </div>
             </div>
@@ -450,8 +595,8 @@ const ChatPanel = () => {
       <div
         className={
           hasStartedConversation
-            ? 'border-t border-transparent bg-white px-[34px] py-5'
-            : 'flex flex-1 items-center justify-center px-[34px]'
+            ? 'border-t border-gray-100 bg-white px-4 py-5 sm:px-6 lg:px-8'
+            : 'flex flex-1 items-center justify-center px-4 py-10 sm:px-6 lg:px-8'
         }
       >
         <div className={hasStartedConversation ? 'w-full' : 'w-full max-w-3xl'}>
@@ -461,10 +606,10 @@ const ChatPanel = () => {
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500 to-orange-600 shadow-lg shadow-orange-500/30">
                   <Sparkles className="h-4 w-4 text-white" strokeWidth={2.5} />
                 </div>
-                <p className="text-base text-gray-600">Hi, there 👏</p>
+                <p className="text-base text-gray-600">Hi, there</p>
               </div>
 
-              <h1 className="text-2xl font-medium text-gray-900">
+              <h1 className="text-2xl font-medium text-gray-900 sm:text-3xl">
                 How can we help?
               </h1>
             </div>
@@ -478,26 +623,42 @@ const ChatPanel = () => {
             className="hidden"
           />
 
-          <div className="relative">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleInputKeyDown}
-              placeholder="Ask a question..."
-              rows={hasStartedConversation ? 3 : 4}
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setComposerMode('ask')}
               disabled={isLoading}
-              className="w-full resize-none rounded-2xl border border-orange-400/40 bg-gray-50 px-5 py-4 pb-14 pr-24 text-[15px] transition-all focus:border-orange-500 focus:bg-white focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-70"
-            />
+              className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${composerMode === 'ask'
+                ? 'bg-gray-900 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+            >
+              Ask question
+            </button>
+            <button
+              type="button"
+              onClick={() => setComposerMode('ingest')}
+              disabled={isLoading}
+              className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors ${composerMode === 'ingest'
+                ? 'bg-orange-500 text-white'
+                : 'bg-orange-50 text-orange-700 hover:bg-orange-100'
+                }`}
+            >
+              <Upload className="h-4 w-4" strokeWidth={2.5} />
+              Add knowledge
+            </button>
+          </div>
 
+          <div className="relative rounded-[1.75rem] border border-orange-400/40 bg-gray-50 p-3 shadow-sm transition-all focus-within:border-orange-500 focus-within:bg-white">
             {uploadedFiles.length > 0 && (
-              <div className="absolute left-5 right-24 top-4 flex flex-wrap gap-2">
+              <div className="mb-3 flex flex-wrap gap-2">
                 {uploadedFiles.map((file) => {
                   const FileIcon = getFileIcon(file.type);
 
                   return (
                     <div
                       key={file.id}
-                      className="flex items-center gap-2 rounded-lg border border-orange-200 bg-white px-2.5 py-1.5 shadow-sm"
+                      className="flex max-w-full items-center gap-2 rounded-lg border border-orange-200 bg-white px-2.5 py-1.5 shadow-sm"
                     >
                       <FileIcon
                         className="h-3.5 w-3.5 text-orange-600"
@@ -524,29 +685,51 @@ const ChatPanel = () => {
               </div>
             )}
 
-            <div className="absolute bottom-4 right-4 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isLoading}
-                className="rounded-lg p-2.5 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
-                title="Attach file"
-              >
-                <Paperclip
-                  className="h-5 w-5 text-gray-600 transition-colors hover:text-orange-600"
-                  strokeWidth={2.5}
-                />
-              </button>
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={handleInputKeyDown}
+              placeholder={
+                composerMode === 'ingest'
+                  ? 'Paste text to add to the knowledge base...'
+                  : 'Ask a question...'
+              }
+              rows={hasStartedConversation ? 3 : 4}
+              disabled={isLoading}
+              className="w-full resize-none bg-transparent px-2 py-1 text-[15px] outline-none disabled:cursor-not-allowed disabled:opacity-70"
+            />
 
-              <button
-                type="button"
-                onClick={() => void handleSend()}
-                disabled={isLoading || (!input.trim() && uploadedFiles.length === 0)}
-                className="rounded-full bg-orange-400 p-2.5 text-white transition-all active:scale-95 hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-orange-400 disabled:active:scale-100"
-                title="Send message"
-              >
-                <ArrowUp className="h-5 w-5" strokeWidth={2.5} />
-              </button>
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-sm text-gray-500">
+                {isUploadAction
+                  ? 'Knowledge mode sends content to the ingestion endpoints.'
+                  : 'Question mode streams answers from the chat endpoint.'}
+              </p>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isLoading}
+                  className="rounded-lg p-2.5 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
+                  title="Attach file"
+                >
+                  <Paperclip
+                    className="h-5 w-5 text-gray-600 transition-colors hover:text-orange-600"
+                    strokeWidth={2.5}
+                  />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleSend()}
+                  disabled={isLoading || (!input.trim() && uploadedFiles.length === 0)}
+                  className="rounded-full bg-orange-400 p-2.5 text-white transition-all hover:bg-orange-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-orange-400 disabled:active:scale-100"
+                  title="Send message"
+                >
+                  <ArrowUp className="h-5 w-5" strokeWidth={2.5} />
+                </button>
+              </div>
             </div>
           </div>
         </div>
