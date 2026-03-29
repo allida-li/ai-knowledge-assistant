@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import Image from 'next/image';
 import {
@@ -39,6 +39,7 @@ interface UploadFilePreview {
 
 interface UploadFilesResponse {
   filePreviews?: UploadFilePreview[];
+  markdown?: string;
 }
 
 interface UploadTextResponse {
@@ -80,19 +81,6 @@ const getFileIcon = (type: string) =>
 const isPdfFile = (type: string, name: string) =>
   type === 'application/pdf' || name.toLowerCase().endsWith('.pdf');
 
-const createFileUploadSummary = (files: UploadedFile[], summaries: string[]) => {
-  return files
-    .map((file, index) =>
-      [
-        `${index + 1}. ${file.name}`,
-        `类型：${file.type || '未知类型'}`,
-        `大小：${formatFileSize(file.size)}`,
-        `摘要：${summaries[index] || '未提取到可用摘要'}`,
-      ].join('\n'),
-    )
-    .join('\n\n');
-};
-
 const createTextUploadDetails = (text: string) => text;
 
 const createTextUploadSummary = (text: string) => {
@@ -133,21 +121,6 @@ const toUtf8File = async (file: File) => {
     type,
     lastModified: file.lastModified,
   });
-};
-
-const getLocalFileSummary = async (file: UploadedFile) => {
-  if (!isTextFile(file.file)) {
-    return '';
-  }
-
-  const normalizedText = (await file.file.text()).trim().replace(/\s+/g, ' ');
-
-  if (!normalizedText) {
-    return '';
-  }
-
-  const summary = normalizedText.slice(0, 180);
-  return normalizedText.length > 180 ? `${summary}...` : summary;
 };
 
 const parseNDJsonLine = (line: string) => {
@@ -197,9 +170,20 @@ const ChatPanel = ({
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [composerMode, setComposerMode] = useState<ComposerMode>('ask');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   const hasStartedConversation = messages.length > 0;
   const isUploadAction = composerMode === 'ingest' || uploadedFiles.length > 0;
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+  }, [messages]);
 
   const updateMessages = (updater: (currentMessages: Message[]) => Message[]) => {
     onMessagesChange(updater);
@@ -266,21 +250,11 @@ const ChatPanel = ({
     }
 
     const data = (await response.json()) as UploadFilesResponse;
-    const localSummaries = await Promise.all(
-      files.map((file) => getLocalFileSummary(file)),
-    );
-
-    const mergedSummaries = files.map((file, index) => {
-      const preview = data.filePreviews?.find(
-        (item) => item.fileName === file.name,
-      )?.preview;
-
-      return preview || localSummaries[index] || '未提取到可用摘要';
-    });
+    const markdownSummary = (data.markdown ?? '').trim();
 
     updateMessages((currentMessages) => [
       ...currentMessages,
-      createMessage(createFileUploadSummary(files, mergedSummaries), 'bot'),
+      createMessage(markdownSummary || '未提取到可用内容。', 'bot'),
     ]);
     onDocumentsChange(buildKnowledgeResults(files.map((file) => file.name).join(' ')));
   };
@@ -449,14 +423,17 @@ const ChatPanel = ({
 
     try {
       if (uploadedFiles.length > 0) {
+        const filesToUpload = uploadedFiles;
+
         updateMessages((currentMessages) => [
           ...currentMessages,
           createMessage('', 'user', {
-            attachments: toMessageAttachments(uploadedFiles),
+            attachments: toMessageAttachments(filesToUpload),
           }),
         ]);
-        await uploadFiles(uploadedFiles);
+
         resetComposer();
+        await uploadFiles(filesToUpload);
         return;
       }
 
@@ -532,7 +509,7 @@ const ChatPanel = ({
           'h-[52px] border border-orange-400/40 bg-white shadow-sm transition-all hover:border-orange-500';
         const cardClassName = options?.cardClassName
           ?? (showPdfLogo
-            ? `flex max-w-full items-center gap-3 rounded-xl px-3 ${sharedCardBehavior}`
+            ? `flex max-w-full items-center gap-3 rounded-xl pl-2.5 pr-3 ${sharedCardBehavior}`
             : `flex max-w-full items-center gap-2 rounded-lg px-2.5 ${sharedCardBehavior}`);
         const fileNameClassName = options?.nameClassName
           ?? (showPdfLogo
@@ -586,7 +563,10 @@ const ChatPanel = ({
   return (
     <div className="flex h-full flex-col">
       {hasStartedConversation && (
-        <div className="flex-1 space-y-6 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 space-y-6 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8"
+        >
           {messages.map((message) => (
             (() => {
               const isUserAttachmentOnly =
