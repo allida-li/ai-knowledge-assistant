@@ -1,9 +1,17 @@
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+}
+
 export interface Message {
   id: string;
   sender: 'user' | 'bot';
   content: string;
   timestamp: string;
   isThinking?: boolean;
+  attachments?: MessageAttachment[];
 }
 
 export interface KnowledgeDocument {

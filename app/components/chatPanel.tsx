@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
+import Image from 'next/image';
 import {
   ArrowUp,
   FileText,
@@ -12,8 +13,14 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { apiUrl } from '../lib/api';
+import pdfLogo from '../docs/images/pdf-logo.svg';
 import { buildKnowledgeResults } from '../lib/mockKnowledge';
-import type { ComposerMode, KnowledgeDocument, Message } from '../types';
+import type {
+  ComposerMode,
+  KnowledgeDocument,
+  Message,
+  MessageAttachment,
+} from '../types';
 
 interface UploadedFile {
   id: string;
@@ -52,7 +59,7 @@ const UTF8_CHARSET = 'charset=utf-8';
 const createMessage = (
   content: string,
   sender: Message['sender'],
-  options?: Partial<Pick<Message, 'isThinking'>>,
+  options?: Partial<Pick<Message, 'isThinking' | 'attachments'>>,
 ): Message => ({
   id: crypto.randomUUID(),
   sender,
@@ -70,16 +77,8 @@ const formatFileSize = (bytes: number) => {
 const getFileIcon = (type: string) =>
   type.startsWith('image/') ? ImageIcon : FileText;
 
-const createFileUploadDetails = (files: UploadedFile[]) =>
-  files
-    .map((file, index) =>
-      [
-        `${index + 1}. ${file.name}`,
-        `类型：${file.type || '未知类型'}`,
-        `大小：${formatFileSize(file.size)}`,
-      ].join('\n'),
-    )
-    .join('\n\n');
+const isPdfFile = (type: string, name: string) =>
+  type === 'application/pdf' || name.toLowerCase().endsWith('.pdf');
 
 const createFileUploadSummary = (files: UploadedFile[], summaries: string[]) => {
   return files
@@ -179,6 +178,14 @@ const formatTimestamp = (timestamp: string) =>
     hour: '2-digit',
     minute: '2-digit',
   });
+
+const toMessageAttachments = (files: UploadedFile[]): MessageAttachment[] =>
+  files.map((file) => ({
+    id: file.id,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  }));
 
 const ChatPanel = ({
   messages,
@@ -444,7 +451,9 @@ const ChatPanel = ({
       if (uploadedFiles.length > 0) {
         updateMessages((currentMessages) => [
           ...currentMessages,
-          createMessage(createFileUploadDetails(uploadedFiles), 'user'),
+          createMessage('', 'user', {
+            attachments: toMessageAttachments(uploadedFiles),
+          }),
         ]);
         await uploadFiles(uploadedFiles);
         resetComposer();
@@ -503,91 +512,187 @@ const ChatPanel = ({
     );
   };
 
+  const renderFileCards = (
+    files: Array<Pick<MessageAttachment, 'id' | 'name' | 'size' | 'type'>>,
+    options?: {
+      removable?: boolean;
+      onRemove?: (fileId: string) => void;
+      className?: string;
+      cardClassName?: string;
+      iconClassName?: string;
+      nameClassName?: string;
+      sizeClassName?: string;
+    },
+  ) => (
+    <div className={options?.className ?? 'flex flex-wrap gap-2'}>
+      {files.map((file) => {
+        const FileIcon = getFileIcon(file.type);
+        const showPdfLogo = isPdfFile(file.type, file.name);
+        const sharedCardBehavior =
+          'h-[52px] border border-orange-400/40 bg-white shadow-sm transition-all hover:border-orange-500';
+        const cardClassName = options?.cardClassName
+          ?? (showPdfLogo
+            ? `flex max-w-full items-center gap-3 rounded-xl px-3 ${sharedCardBehavior}`
+            : `flex max-w-full items-center gap-2 rounded-lg px-2.5 ${sharedCardBehavior}`);
+        const fileNameClassName = options?.nameClassName
+          ?? (showPdfLogo
+            ? 'max-w-[160px] truncate text-[14px] font-semibold leading-tight text-gray-900'
+            : 'max-w-[120px] truncate text-[14px] font-medium text-gray-900');
+        const fileSizeClassName = options?.sizeClassName
+          ?? (showPdfLogo
+            ? 'mt-0.5 text-xs text-gray-500'
+            : 'text-[11px] text-gray-500');
+
+        return (
+          <div
+            key={file.id}
+            className={cardClassName}
+          >
+            {showPdfLogo ? (
+              <Image
+                src={pdfLogo}
+                alt="PDF"
+                className="h-10 w-10 shrink-0 object-contain"
+              />
+            ) : (
+              <FileIcon
+                className={options?.iconClassName ?? 'h-3.5 w-3.5 text-orange-600'}
+                strokeWidth={2.5}
+              />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className={fileNameClassName}>
+                {file.name}
+              </p>
+              <p className={fileSizeClassName}>
+                {formatFileSize(file.size)}
+              </p>
+            </div>
+            {options?.removable && options.onRemove ? (
+              <button
+                type="button"
+                onClick={() => options.onRemove?.(file.id)}
+                className="rounded p-0.5 transition-colors hover:bg-gray-100"
+              >
+                <X className="h-3 w-3 text-gray-600" strokeWidth={2.5} />
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className="flex h-full flex-col">
       {hasStartedConversation && (
         <div className="flex-1 space-y-6 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
           {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'
-                }`}
-            >
-              <div
-                className={`max-w-[88%] rounded-2xl px-4 py-3.5 sm:max-w-[78%] sm:px-5 ${message.sender === 'user'
-                  ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg shadow-orange-500/25'
-                  : 'bg-gray-100 text-gray-900'
-                  }`}
-              >
-                <div className="text-[15px] leading-relaxed">
-                  {message.isThinking ? (
-                    <span className="inline-flex items-center gap-1.5 text-gray-500">
-                      <span>AI正在思考中</span>
-                      <span className="flex gap-1">
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
-                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" />
-                      </span>
-                    </span>
-                  ) : message.sender === 'bot' ? (
-                    <div className="space-y-3">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          p: ({ children }) => (
-                            <p className="whitespace-pre-wrap leading-7 text-gray-800">
-                              {children}
-                            </p>
-                          ),
-                          ul: ({ children }) => (
-                            <ul className="list-disc space-y-2 pl-5 text-gray-800">
-                              {children}
-                            </ul>
-                          ),
-                          ol: ({ children }) => (
-                            <ol className="list-decimal space-y-2 pl-5 text-gray-800">
-                              {children}
-                            </ol>
-                          ),
-                          li: ({ children }) => <li className="pl-1">{children}</li>,
-                          blockquote: ({ children }) => (
-                            <blockquote className="rounded-r-2xl border-l-4 border-orange-400 bg-orange-50/80 px-4 py-3 text-[15px] italic text-orange-900 shadow-sm">
-                              {children}
-                            </blockquote>
-                          ),
-                          h1: ({ children }) => (
-                            <h1 className="text-lg font-semibold text-gray-900">{children}</h1>
-                          ),
-                          h2: ({ children }) => (
-                            <h2 className="text-base font-semibold text-gray-900">{children}</h2>
-                          ),
-                          h3: ({ children }) => (
-                            <h3 className="text-sm font-semibold text-gray-900">{children}</h3>
-                          ),
-                          code: ({ children }) => (
-                            <code className="rounded-md bg-gray-200 px-1.5 py-0.5 text-[13px] text-gray-900">
-                              {children}
-                            </code>
-                          ),
-                        }}
-                      >
-                        {message.content}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                    <div className="whitespace-pre-wrap break-words text-white">
-                      {message.content}
-                    </div>
-                  )}
-                </div>
-                <p
-                  className={`mt-2 text-xs ${message.sender === 'user' ? 'text-orange-100' : 'text-gray-500'
+            (() => {
+              const isUserAttachmentOnly =
+                message.sender === 'user'
+                && Boolean(message.attachments?.length)
+                && !message.content;
+
+              return (
+                <div
+                  key={message.id}
+                  className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'
                     }`}
                 >
-                  {formatTimestamp(message.timestamp)}
-                </p>
-              </div>
-            </div>
+                  <div
+                    className={`max-w-[88%] sm:max-w-[78%] ${isUserAttachmentOnly
+                      ? 'bg-transparent p-0 shadow-none'
+                      : `rounded-2xl px-4 py-3.5 sm:px-5 ${message.sender === 'user'
+                        ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg shadow-orange-500/25'
+                        : 'bg-gray-100 text-gray-900'
+                      }`
+                      }`}
+                  >
+                    <div className="text-[15px] leading-relaxed">
+                      {message.isThinking ? (
+                        <span className="inline-flex items-center gap-1.5 text-gray-500">
+                          <span>AI正在思考中</span>
+                          <span className="flex gap-1">
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" />
+                          </span>
+                        </span>
+                      ) : message.sender === 'bot' ? (
+                        <div className="space-y-3">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              p: ({ children }) => (
+                                <p className="whitespace-pre-wrap leading-7 text-gray-800">
+                                  {children}
+                                </p>
+                              ),
+                              ul: ({ children }) => (
+                                <ul className="list-disc space-y-2 pl-5 text-gray-800">
+                                  {children}
+                                </ul>
+                              ),
+                              ol: ({ children }) => (
+                                <ol className="list-decimal space-y-2 pl-5 text-gray-800">
+                                  {children}
+                                </ol>
+                              ),
+                              li: ({ children }) => <li className="pl-1">{children}</li>,
+                              blockquote: ({ children }) => (
+                                <blockquote className="rounded-r-2xl border-l-4 border-orange-400 bg-orange-50/80 px-4 py-3 text-[15px] italic text-orange-900 shadow-sm">
+                                  {children}
+                                </blockquote>
+                              ),
+                              h1: ({ children }) => (
+                                <h1 className="text-lg font-semibold text-gray-900">{children}</h1>
+                              ),
+                              h2: ({ children }) => (
+                                <h2 className="text-base font-semibold text-gray-900">{children}</h2>
+                              ),
+                              h3: ({ children }) => (
+                                <h3 className="text-sm font-semibold text-gray-900">{children}</h3>
+                              ),
+                              code: ({ children }) => (
+                                <code className="rounded-md bg-gray-200 px-1.5 py-0.5 text-[13px] text-gray-900">
+                                  {children}
+                                </code>
+                              ),
+                            }}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {message.attachments?.length ? (
+                            renderFileCards(message.attachments, {
+                              className: 'flex flex-wrap gap-2',
+                            })
+                          ) : null}
+                          {message.content ? (
+                            <div className="whitespace-pre-wrap break-words text-white">
+                              {message.content}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                    <p
+                      className={`mt-2 text-xs ${message.sender === 'user'
+                        ? isUserAttachmentOnly
+                          ? 'text-gray-500'
+                          : 'text-orange-100'
+                        : 'text-gray-500'
+                        }`}
+                    >
+                      {formatTimestamp(message.timestamp)}
+                    </p>
+                  </div>
+                </div>
+              );
+            })()
           ))}
         </div>
       )}
@@ -651,36 +756,10 @@ const ChatPanel = ({
 
           <div className="relative rounded-[1.75rem] border border-orange-400/40 bg-gray-50 p-3 shadow-sm transition-all focus-within:border-orange-500 focus-within:bg-white">
             {uploadedFiles.length > 0 && (
-              <div className="mb-3 flex flex-wrap gap-2">
-                {uploadedFiles.map((file) => {
-                  const FileIcon = getFileIcon(file.type);
-
-                  return (
-                    <div
-                      key={file.id}
-                      className="flex max-w-full items-center gap-2 rounded-lg border border-orange-200 bg-white px-2.5 py-1.5 shadow-sm"
-                    >
-                      <FileIcon
-                        className="h-3.5 w-3.5 text-orange-600"
-                        strokeWidth={2.5}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="max-w-[120px] truncate text-xs font-medium text-gray-900">
-                          {file.name}
-                        </p>
-                        <p className="text-[11px] text-gray-500">
-                          {formatFileSize(file.size)}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeFile(file.id)}
-                        className="rounded p-0.5 transition-colors hover:bg-gray-100"
-                      >
-                        <X className="h-3 w-3 text-gray-600" strokeWidth={2.5} />
-                      </button>
-                    </div>
-                  );
+              <div className="mb-3">
+                {renderFileCards(uploadedFiles, {
+                  removable: true,
+                  onRemove: removeFile,
                 })}
               </div>
             )}
@@ -699,13 +778,7 @@ const ChatPanel = ({
               className="w-full resize-none bg-transparent px-2 py-1 text-[15px] outline-none disabled:cursor-not-allowed disabled:opacity-70"
             />
 
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <p className="text-sm text-gray-500">
-                {isUploadAction
-                  ? 'Knowledge mode sends content to the ingestion endpoints.'
-                  : 'Question mode streams answers from the chat endpoint.'}
-              </p>
-
+            <div className="mt-3 flex items-center justify-end gap-3">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
