@@ -78,24 +78,21 @@ const Sidebar = ({
                 key={conversation.id}
                 type="button"
                 onClick={() => onSelectConversation(conversation.id)}
-                className={`flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-all group ${
-                  isActive
+                className={`flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-all group ${isActive
                     ? 'border-orange-100 bg-orange-50'
                     : 'border-transparent hover:bg-gray-50'
-                }`}
+                  }`}
               >
                 <History
-                  className={`mt-0.5 h-4 w-4 flex-shrink-0 ${
-                    isActive
+                  className={`mt-0.5 h-4 w-4 flex-shrink-0 ${isActive
                       ? 'text-orange-600'
                       : 'text-gray-400 group-hover:text-gray-600'
-                  }`}
+                    }`}
                 />
                 <div className="min-w-0 flex-1 overflow-hidden">
                   <p
-                    className={`truncate text-sm ${
-                      isActive ? 'font-medium text-gray-900' : 'text-gray-700'
-                    }`}
+                    className={`truncate text-sm ${isActive ? 'font-medium text-gray-900' : 'text-gray-700'
+                      }`}
                   >
                     {conversation.title}
                   </p>
@@ -119,7 +116,7 @@ const Sidebar = ({
             <User className="h-4 w-4 text-white" strokeWidth={2.5} />
           </div>
           <div className="flex-1 overflow-hidden">
-            <p className="text-sm font-medium text-gray-900">Alex Chen</p>
+            <p className="text-sm font-medium text-gray-900">Allida Li</p>
           </div>
           <ChevronDown className="h-4 w-4 text-gray-400 transition-transform group-hover:rotate-180 group-hover:text-gray-600" />
 

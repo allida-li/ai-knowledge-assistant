@@ -2,7 +2,6 @@
 
 import { useCallback, useState } from 'react';
 import ChatPanel from './components/chatPanel';
-import ResultsPanel from './components/resultsPanel';
 import Sidebar from './components/sidebar';
 import { DEFAULT_KNOWLEDGE_DOCUMENTS } from './lib/mockKnowledge';
 import type { Conversation, KnowledgeDocument, Message } from './types';
@@ -111,7 +110,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gray-50 xl:h-screen">
-      <div className="mx-auto flex min-h-screen max-w-[1800px] flex-col xl:grid xl:h-screen xl:grid-cols-[16rem_minmax(0,1fr)_24rem]">
+      <div className="mx-auto flex min-h-screen max-w-[1800px] flex-col xl:grid xl:h-screen xl:grid-cols-[16rem_minmax(0,1fr)]">
         <aside className="border-b border-gray-200 bg-white xl:overflow-hidden xl:border-b-0 xl:border-r">
           <Sidebar
             conversations={conversations.map((conversation) => ({
@@ -133,13 +132,6 @@ export default function Home() {
             onDocumentsChange={handleDocumentsChange}
           />
         </section>
-
-        <aside className="border-t border-gray-200 bg-gray-50 xl:overflow-hidden xl:border-t-0">
-          <ResultsPanel
-            key={activeConversation.id}
-            documents={activeConversation.documents}
-          />
-        </aside>
       </div>
     </main>
   );
