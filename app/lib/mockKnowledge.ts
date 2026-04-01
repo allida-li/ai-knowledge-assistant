@@ -116,3 +116,52 @@ export const buildKnowledgeResults = (query: string) => {
     .sort((left, right) => right.relevance - left.relevance)
     .slice(0, 6);
 };
+
+interface UploadedKnowledgeContent {
+  content: string;
+  mimetype?: string;
+  chunksAdded?: number;
+}
+
+const extractKeywords = (text: string) => {
+  const matches = text.match(/[A-Za-z0-9\u4e00-\u9fa5]{2,}/g) ?? [];
+  const uniqueKeywords = Array.from(new Set(matches.map((item) => item.toLowerCase())));
+
+  return uniqueKeywords.slice(0, 5);
+};
+
+const buildTitleFromContent = (content: string, index: number) => {
+  const firstLine = content
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean);
+
+  if (firstLine) {
+    return firstLine.slice(0, 40);
+  }
+
+  return `Uploaded Content ${index + 1}`;
+};
+
+export const buildKnowledgeResultsFromUploads = (
+  files: UploadedKnowledgeContent[],
+): KnowledgeDocument[] => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  return files
+    .filter((file) => file.chunksAdded && file.chunksAdded > 0 && file.content.trim())
+    .map((file, index) => {
+      const normalizedContent = file.content.trim();
+
+      return {
+        id: `upload-${index + 1}`,
+        title: buildTitleFromContent(normalizedContent, index),
+        excerpt: normalizedContent.slice(0, 220),
+        keywords: extractKeywords(normalizedContent),
+        relevance: Math.max(70, 96 - index * 4),
+        source: file.mimetype || 'uploaded content',
+        date: today,
+      };
+    })
+    .slice(0, 6);
+};

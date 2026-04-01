@@ -14,7 +14,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { apiUrl } from '../lib/api';
 import pdfLogo from '../docs/images/pdf-logo.svg';
-import { buildKnowledgeResults } from '../lib/mockKnowledge';
+import {
+  buildKnowledgeResults,
+  buildKnowledgeResultsFromUploads,
+} from '../lib/mockKnowledge';
 import type {
   ComposerMode,
   KnowledgeDocument,
@@ -27,13 +30,13 @@ interface UploadedFile {
   name: string;
   size: number;
   type: string;
+  lastModified: number;
   file: File;
 }
 
 interface UploadFilePreview {
-  fileName: string;
   mimetype: string;
-  preview: string;
+  content: string;
   chunksAdded: number;
 }
 
@@ -93,6 +96,18 @@ const createTextUploadSummary = (text: string) => {
 
 const getMarkdownSummaryFromResponse = (data: UploadTextResponse) => {
   return data.markdown ?? data.summary ?? data.answer ?? data.content ?? '';
+};
+
+const buildMarkdownFromUploadedFiles = (files: UploadFilePreview[]) => {
+  return files
+    .filter((file) => file.chunksAdded > 0 && file.content.trim())
+    .map((file) =>
+      file.content
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n'),
+    )
+    .join('\n\n');
 };
 
 const isTextFile = (file: File) => {
@@ -250,13 +265,15 @@ const ChatPanel = ({
     }
 
     const data = (await response.json()) as UploadFilesResponse;
-    const markdownSummary = (data.markdown ?? '').trim();
+    const markdownSummary = (
+      buildMarkdownFromUploadedFiles(data.filePreviews ?? []) || data.markdown || ''
+    ).trim();
 
     updateMessages((currentMessages) => [
       ...currentMessages,
       createMessage(markdownSummary || '未提取到可用内容。', 'bot'),
     ]);
-    onDocumentsChange(buildKnowledgeResults(files.map((file) => file.name).join(' ')));
+    onDocumentsChange(buildKnowledgeResultsFromUploads(data.filePreviews ?? []));
   };
 
   const uploadText = async (text: string) => {
@@ -468,10 +485,28 @@ const ChatPanel = ({
       name: file.name,
       size: file.size,
       type: file.type,
+      lastModified: file.lastModified,
       file,
     }));
 
-    setUploadedFiles((currentFiles) => [...currentFiles, ...newFiles]);
+    setUploadedFiles((currentFiles) => {
+      const seen = new Set(
+        currentFiles.map((file) =>
+          `${file.name}:${file.size}:${file.type}:${file.lastModified}`,
+        ),
+      );
+      const uniqueNewFiles = newFiles.filter((file) => {
+        const signature = `${file.name}:${file.size}:${file.type}:${file.lastModified}`;
+        if (seen.has(signature)) {
+          return false;
+        }
+
+        seen.add(signature);
+        return true;
+      });
+
+      return [...currentFiles, ...uniqueNewFiles];
+    });
     setComposerMode('ingest');
     event.target.value = '';
   };
