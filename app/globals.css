@@ -24,3 +24,66 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
+
+.sidebar-desktop {
+  display: none;
+}
+
+@media (max-width: 999px) {
+  .responsive-shell {
+    min-height: 100vh;
+  }
+}
+
+@media (min-width: 1000px) {
+  .responsive-shell {
+    --desktop-scale: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  .responsive-frame {
+    display: grid;
+    grid-template-columns: 16rem minmax(0, 1fr);
+    width: min(1800px, 100vw);
+    min-height: 100vh;
+    height: 100vh;
+    transform-origin: top center;
+  }
+
+  .responsive-sidebar {
+    overflow: hidden;
+    border-bottom: 0;
+    border-right: 1px solid #e5e7eb;
+  }
+
+  .responsive-chat {
+    min-height: 0;
+    overflow: hidden;
+    border-right: 1px solid #e5e7eb;
+  }
+
+  .sidebar-mobile-brand {
+    display: none;
+  }
+
+  .sidebar-desktop {
+    display: flex;
+  }
+}
+
+@media (min-width: 1000px) and (max-width: 1200px) {
+  .responsive-shell {
+    --desktop-scale: calc(100vw / 1200);
+  }
+
+  .responsive-frame {
+    width: 1200px;
+    min-height: calc(100vh / var(--desktop-scale));
+    height: calc(100vh / var(--desktop-scale));
+    transform: scale(var(--desktop-scale));
+  }
+}

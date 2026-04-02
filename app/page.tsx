@@ -109,9 +109,9 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 xl:h-screen">
-      <div className="mx-auto flex min-h-screen max-w-[1800px] flex-col xl:grid xl:h-screen xl:grid-cols-[16rem_minmax(0,1fr)]">
-        <aside className="border-b border-gray-200 bg-white xl:overflow-hidden xl:border-b-0 xl:border-r">
+    <main className="responsive-shell min-h-screen bg-gray-50">
+      <div className="responsive-frame mx-auto flex min-h-screen max-w-[1800px] flex-col">
+        <aside className="responsive-sidebar border-b border-gray-200 bg-white">
           <Sidebar
             conversations={conversations.map((conversation) => ({
               id: conversation.id,
@@ -124,7 +124,7 @@ export default function Home() {
           />
         </aside>
 
-        <section className="min-h-[60vh] bg-white xl:min-h-0 xl:overflow-hidden xl:border-r xl:border-gray-200">
+        <section className="responsive-chat min-h-[calc(100vh-5rem)] bg-white">
           <ChatPanel
             key={activeConversation.id}
             messages={activeConversation.messages}
